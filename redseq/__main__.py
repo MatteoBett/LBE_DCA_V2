@@ -10,7 +10,6 @@ import torch
 import redseq.dca as dca
 import redseq.utils as utils
 from redseq.loader import DatasetDCA
-from redseq.viz import display
 import benchmark.benchmark_display as bm_display
 
 def premain(famtuple : Tuple[str], do_one : bool = False):
@@ -68,7 +67,7 @@ def premain(famtuple : Tuple[str], do_one : bool = False):
 
 def main(infile : str, 
          max_steps : int, 
-         min_pearson : float, 
+         min_eval : float, 
          lr : float, 
          sample_it : int, 
          family_outdir_biased : str, 
@@ -79,13 +78,18 @@ def main(infile : str,
          seq_fraction : int,
          constant_bias : bool,
          fixed_gaps : bool,
-         bin : int | None = None,
+         eval_method : str,
+         adaptative : bool,
+         plotting : bool,
+         family_fig_dir : str,
+         interpolation_targets : List[float] | None = None,
+         full_interpolation : bool | None = None,
          ):
     
-    params_dca_biased = os.path.join(family_outdir_biased, f"params{seq_fraction}_{bin}.json") if bin is not None else os.path.join(family_outdir_biased, f"params{seq_fraction}.json") 
-    sample_seq_biased = os.path.join(family_outdir_biased, f"genseq{seq_fraction}_{bin}.fasta") if bin is not None else os.path.join(family_outdir_biased, f"genseq{seq_fraction}.fasta") 
-    params_dca_unbiased = os.path.join(family_outdir_unbiased, f"params{seq_fraction}_{bin}.json") if bin is not None else os.path.join(family_outdir_unbiased, f"params{seq_fraction}.json") 
-    sample_seq_unbiased = os.path.join(family_outdir_unbiased, f"genseq{seq_fraction}_{bin}.fasta") if bin is not None else os.path.join(family_outdir_unbiased, f"genseq{seq_fraction}.fasta") 
+    params_dca_biased = os.path.join(family_outdir_biased, f"params{seq_fraction}.json") 
+    sample_seq_biased = os.path.join(family_outdir_biased, f"genseq{seq_fraction}.fasta") 
+    params_dca_unbiased =  os.path.join(family_outdir_unbiased, f"params{seq_fraction}.json") 
+    sample_seq_unbiased = os.path.join(family_outdir_unbiased, f"genseq{seq_fraction}.fasta") 
     dataset = DatasetDCA(path_data=infile, 
                          params_file_unbiased=params_dca_unbiased,
                          params_file_biased=params_dca_biased,
@@ -93,19 +97,36 @@ def main(infile : str,
                          chains_unbiased_file=sample_seq_unbiased,
                          device='cpu')
 
-    dca.fit_model(dataset, max_steps, min_pearson, lr=lr)
+    n_chains = 10000
+    nb_sweep = 10
+    beta = 1.0
+    dca.fit_model(dataset=dataset, 
+                  max_step=max_steps, 
+                  min_eval=min_eval,
+                  N=n_chains,
+                  nb_gibbs=nb_sweep,
+                  lr=lr, 
+                  beta=beta,
+                  eval_method=eval_method)
+    
     dca.sample_trained(dataset=dataset,
-                       num_gen=20000, 
-                       max_sweeps=5,
+                       num_gen=n_chains, 
+                       max_sweeps=nb_sweep,
                        sample_it=sample_it,
-                       min_pearson=min_pearson,
+                       min_eval=min_eval,
                        gap_fraction=gap_fraction,
                        bias_flag=bias_flag,
                        indel=indel,
+                       beta=beta,
                        seq_fraction=seq_fraction,
                        constant_bias=constant_bias,
-                       bin=bin,
-                       fixed_gaps=fixed_gaps)
+                       fixed_gaps=fixed_gaps,
+                       eval_method=eval_method,
+                       adaptative=adaptative,
+                       interpolation_targets=interpolation_targets,
+                       full_interpolation=full_interpolation,
+                       plotting=plotting,
+                       family_fig_dir=family_fig_dir)
 
 def save_params():
     params = utils.load_params(params_file=r'/home/mbettiati/LBE_MatteoBettiati/code/vdca/output/sequences/interpolation/Azoarcus/non_biased/params0_0.json') 
@@ -121,10 +142,11 @@ if __name__ == "__main__":
     parser.add_argument('-o', '--output', help="Output directory", type=str, default='output')
     parser.add_argument('-a', '--alphabet', help="Alphabet of tokens used in sequences (e.g. -AUCG or -ATCG)", type=str, default='-AUCG')
     parser.add_argument('-t', '--target_pearson', help='Targetted pearson correlation with the input sequences', type=float, default=0.95)
-    parser.add_argument('-m', "--max_steps", help='Maximum number of iterations to make converge the model. Halts the model if the target pearson is not reached' , type=int, default=100)
-    parser.add_argument('-lr', "--learning_rate", help='Learning rate of the DCA model', type=float, default=0.05)
+    parser.add_argument('-m', "--max_steps", help='Maximum number of iterations to make converge the model. Halts the model if the target pearson is not reached' , type=int, default=250)
+    parser.add_argument('-lr', "--learning_rate", help='Learning rate of the DCA model', type=float, default=0.015)
     parser.add_argument('-g', '--gaps_fraction', help='Targetted average gap fraction in the generated sequences', type=float, nargs='+', default=[])
-    parser.add_argument('-s', '--sample_iterations', help="The maximum number of sample iterations to perform", type=int, default=100)
+    parser.add_argument('-s', '--sample_iterations', help="The maximum number of sample iterations to perform", type=int, default=150)
+    parser.add_argument('-e', '--eval_method', help='Choose evaluation method for convergence. Currently supported: R2 and pearson. Default: pearson', type=str, default='pearson')
 
     parser.add_argument('--do_one', help="If True, only one family will be processed", type=bool, default=False)
     parser.add_argument('-p', '--plotting', help='If True then the pdf report is generated', type=bool, default=True)
@@ -132,10 +154,12 @@ if __name__ == "__main__":
     parser.add_argument("-b", '--bias', help='Bias the gaps distribution', type=bool, default=False)
     parser.add_argument("-c", '--constant_bias', help="Apply a constant bias on the data", type=bool, default=False)
     parser.add_argument("-d", '--indel', help="Indicate whether to discriminate between types of gaps.", type=bool, default=False)
+    parser.add_argument('--adaptative', help="Adaptative gap bias", type=bool, default=False)
     parser.add_argument('--seq_fraction', help="Indicates the fraction of sequences used in the modelling", type=int, default=0)
     parser.add_argument('--fixed_gaps', help="Fixes the most occurring gaps in the alignment corresponding to the designated bias and explore the sequence space for those.", type=bool, default=False)
     parser.add_argument('--full_interpolation', help="Passes the program in interpolation mode and repeats generation until all bins are passed", type=bool, default=False)
     parser.add_argument("--interpolation_bin_size", help="Indicates in absolute values the bins of gaps to consider", type=int, default=5)
+    parser.add_argument("--interpolation_range", help="Indicates the targetted % range of gaps bias for interpolation", type=int, nargs=2, default=[0,50])
     args = parser.parse_args()
 
     family_dir = os.path.join(base_dir, args.family_dir)
@@ -160,8 +184,12 @@ if __name__ == "__main__":
 
     bias = args.bias 
     indel = args.indel
+    adaptative = args.adaptative
     famlist = utils.family_stream(family_dir=family_dir)
     use_min = False
+    eval_method = args.eval_method
+    interpolation_start, interpolation_end = args.interpolation_range
+    interpolation_targets = None
     
     if bias:
         if len(gaps_fraction) <= 1:
@@ -175,6 +203,10 @@ if __name__ == "__main__":
         out = "fixed_gaps"
     elif indel:
         out = 'indel'
+    elif adaptative and not full_interpolation:
+        out = "adaptative"
+    elif full_interpolation and adaptative:
+        out = "interpolation"
     else:
         out = 'raw'
 
@@ -185,116 +217,57 @@ if __name__ == "__main__":
         with Pool(2) as p:
             print(p.map(premain, famlist))
 
-    if full_interpolation:
-        out = "interpolation"
-        for bin in range(30, 35, interpolation_bins):
-            for index, family_file, infile_path, tot in utils.family_stream(family_dir=family_dir):
-                seqs, shortest, seqsize = utils.get_summary(infile_path)
-                gap_fraction = bin/seqsize
-                
-                family_outdir_biased = os.path.join(outdir, "sequences", out, family_file.split('.')[0], "biased")
-                print("Gap fraction targetted", gap_fraction)
-                family_outdir_unbiased = os.path.join(outdir, "sequences", out, family_file.split('.')[0], "non_biased")
+    for index, family_file, infile_path, tot in utils.family_stream(family_dir=family_dir):
+        seqs, shortest, sizeseq = utils.get_summary(infile_path, 'custom')
+        if use_min:
+            gap_fraction = shortest
+        else:
+            gap_fraction = gaps_fraction[index]
+            gap_fraction = seqs['-'] + gap_fraction*seqs['-'] 
 
-                os.makedirs(family_outdir_biased, exist_ok=True)
-                os.makedirs(family_outdir_unbiased, exist_ok=True)
-                if run_generation:
-                    main(
-                        infile=infile_path,
-                        max_steps=max_steps,
-                        min_pearson=target_pearson,
-                        sample_it=sample_it,
-                        lr=lr,
-                        family_outdir_biased=family_outdir_biased,
-                        family_outdir_unbiased=family_outdir_unbiased,
-                        gap_fraction=gap_fraction,
-                        bias_flag=bias,
-                        indel=indel,
-                        seq_fraction=seqs_fraction,
-                        constant_bias=constant_bias,
-                        bin=bin,
-                        fixed_gaps=fixed_gaps
-                    )
+        if full_interpolation:
+            interpolation_targets = [val/sizeseq for val in range(interpolation_start, interpolation_end, interpolation_bins)]
+        
+        family_outdir_biased = os.path.join(outdir, "sequences", out, family_file.split('.')[0], "biased")
+        print("Gap fraction targetted", gap_fraction)
+        family_outdir_unbiased = os.path.join(outdir, "sequences", out, family_file.split('.')[0], "non_biased")
+        if plotting:
+            family_fig_dir = os.path.join(fig_dir, family_file.split('.')[0], out)
+            os.makedirs(family_fig_dir, exist_ok=True)
 
-                biased_seqs = os.path.join(outdir, "sequences", out, family_file.split('.')[0], "biased", f"genseq{seqs_fraction}_{bin}.fasta")
-                unbiased_seqs = os.path.join(outdir, "sequences", out, family_file.split('.')[0], "non_biased", f"genseq{seqs_fraction}_{bin}.fasta")
-                biased_params = os.path.join(outdir, "sequences", out, family_file.split('.')[0], "biased", f"params{seqs_fraction}_{bin}.json")
-                unbiased_params = os.path.join(outdir, "sequences", out, family_file.split('.')[0], "non_biased", f"params{seqs_fraction}_{bin}.json")
-                null_model_seqs = os.path.join(outdir, "sequences", out, family_file.split('.')[0], "biased", f"null_model{seqs_fraction}_{bin}.fasta")
-                natural_shorts_seq = os.path.join(os.path.join(os.path.dirname(family_dir), "shorts"), family_file.split('.')[0], f"{family_file}_{bin}.fasta")
-                natural_longs_seq = os.path.join(os.path.join(os.path.dirname(family_dir), "longs"), family_file.split('.')[0], f"{family_file}_{bin}.fasta")
+        os.makedirs(family_outdir_biased, exist_ok=True)
+        os.makedirs(family_outdir_unbiased, exist_ok=True)
 
-                if plotting:
-                    family_fig_dir = os.path.join(fig_dir, family_file.split('.')[0], "full_interpolation")
-                    os.makedirs(family_fig_dir, exist_ok=True)
-                    display.homology_vs_gaps(chains_file_ref=unbiased_seqs, 
-                                            infile_path=infile_path, 
-                                            chains_file_bias=biased_seqs,
-                                            indel=indel, 
-                                            fig_dir=family_fig_dir,
-                                            params_path_unbiased=unbiased_params,
-                                            params_path_biased=biased_params,
-                                            alphabet=alphabet,
-                                            constant=constant_bias,
-                                            bin=bin,
-                                            fixed_gaps=fixed_gaps)    
-                
-                if do_one:
-                    break
-    else:
-        for index, family_file, infile_path, tot in utils.family_stream(family_dir=family_dir):
-            seqs, shortest, _ = utils.get_summary(infile_path)
-            if use_min:
-                gap_fraction = shortest
-            else:
-                gap_fraction = gaps_fraction[index]
-                gap_fraction = seqs['-'] + gap_fraction*seqs['-'] 
-            
-            family_outdir_biased = os.path.join(outdir, "sequences", out, family_file.split('.')[0], "biased")
-            print("Gap fraction targetted", gap_fraction)
-            family_outdir_unbiased = os.path.join(outdir, "sequences", out, family_file.split('.')[0], "non_biased")
+        if run_generation:
+            main(
+                infile=infile_path,
+                max_steps=max_steps,
+                min_eval=target_pearson,
+                sample_it=sample_it,
+                lr=lr,
+                family_outdir_biased=family_outdir_biased,
+                family_outdir_unbiased=family_outdir_unbiased,
+                gap_fraction=gap_fraction,
+                bias_flag=bias,
+                indel=indel,
+                seq_fraction=seqs_fraction,
+                constant_bias=constant_bias,
+                fixed_gaps=fixed_gaps,
+                eval_method=eval_method,
+                adaptative=adaptative,
+                full_interpolation=full_interpolation,
+                interpolation_targets=interpolation_targets,
+                plotting=plotting,
+                family_fig_dir=family_fig_dir
+            )
 
-            os.makedirs(family_outdir_biased, exist_ok=True)
-            os.makedirs(family_outdir_unbiased, exist_ok=True)
-
-            if run_generation:
-                main(
-                    infile=infile_path,
-                    max_steps=max_steps,
-                    min_pearson=target_pearson,
-                    sample_it=sample_it,
-                    lr=lr,
-                    family_outdir_biased=family_outdir_biased,
-                    family_outdir_unbiased=family_outdir_unbiased,
-                    gap_fraction=gap_fraction,
-                    bias_flag=bias,
-                    indel=indel,
-                    seq_fraction=seqs_fraction,
-                    constant_bias=constant_bias,
-                    fixed_gaps=fixed_gaps
-                )
-
-            biased_seqs = os.path.join(outdir, "sequences", out, family_file.split('.')[0], "biased", f"genseq{seqs_fraction}.fasta")
-            unbiased_seqs = os.path.join(outdir, "sequences", out, family_file.split('.')[0], "non_biased", f"genseq{seqs_fraction}.fasta")
-            biased_params = os.path.join(outdir, "sequences", out, family_file.split('.')[0], "biased", f"params{seqs_fraction}.json")
-            unbiased_params = os.path.join(outdir, "sequences", out, family_file.split('.')[0], "non_biased", f"params{seqs_fraction}.json")
-            null_model_seqs = os.path.join(outdir, "sequences", out, family_file.split('.')[0], "biased", f"null_model{seqs_fraction}.fasta")
-            natural_shorts_seq = os.path.join(os.path.join(os.path.dirname(family_dir), "shorts"), family_file.split('.')[0], f"{family_file}.fasta")
-            natural_longs_seq = os.path.join(os.path.join(os.path.dirname(family_dir), "longs"), family_file.split('.')[0], f"{family_file}.fasta")
-
-            if plotting:
-                family_fig_dir = os.path.join(fig_dir, family_file.split('.')[0])
-                os.makedirs(family_fig_dir, exist_ok=True)
-                display.homology_vs_gaps(chains_file_ref=unbiased_seqs, 
-                                        infile_path=infile_path, 
-                                        chains_file_bias=biased_seqs,
-                                        indel=indel, 
-                                        fig_dir=family_fig_dir,
-                                        params_path_unbiased=unbiased_params,
-                                        params_path_biased=biased_params,
-                                        alphabet=alphabet,
-                                        constant=constant_bias,
-                                        fixed_gaps=fixed_gaps)    
-            
-            if do_one:
-                break
+        biased_seqs = os.path.join(outdir, "sequences", out, family_file.split('.')[0], "biased", f"genseq{seqs_fraction}.fasta")
+        unbiased_seqs = os.path.join(outdir, "sequences", out, family_file.split('.')[0], "non_biased", f"genseq{seqs_fraction}.fasta")
+        biased_params = os.path.join(outdir, "sequences", out, family_file.split('.')[0], "biased", f"params{seqs_fraction}.json")
+        unbiased_params = os.path.join(outdir, "sequences", out, family_file.split('.')[0], "non_biased", f"params{seqs_fraction}.json")
+        null_model_seqs = os.path.join(outdir, "sequences", out, family_file.split('.')[0], "biased", f"null_model{seqs_fraction}.fasta")
+        natural_shorts_seq = os.path.join(os.path.join(os.path.dirname(family_dir), "shorts"), family_file.split('.')[0], f"{family_file}.fasta")
+        natural_longs_seq = os.path.join(os.path.join(os.path.dirname(family_dir), "longs"), family_file.split('.')[0], f"{family_file}.fasta")
+    
+        if do_one:
+            break

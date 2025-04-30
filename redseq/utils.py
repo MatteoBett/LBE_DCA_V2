@@ -1,14 +1,50 @@
 import os, json
 from collections import Counter
-from typing import List
+from typing import List, Dict
 from typing import Tuple
 
 import numpy as np
 import torch
+import torchmetrics as tm
 from Bio import SeqIO
+from scipy.stats import pearsonr
+
+import redseq.dca as dca
 
 NUC = {'-':0,'A':1,'U':2,'C':3,'G':4} # Example mapping
 REV_NUC = {v:k for k,v in NUC.items()}
+
+def compute_energy_confs(x : torch.Tensor, h_parms: torch.Tensor, j_parms: torch.Tensor) -> torch.Tensor:
+    M, L, q = x.shape
+
+    # Flatten along the last two dimensions (L*q) for batch processing
+    x_oh = x.reshape(M, L * q)
+    bias_oh = h_parms.view(-1)  # Flatten bias
+    couplings_oh = j_parms.reshape(L * q, L * q)
+
+    # Compute energy contributions
+    field = - torch.matmul(x_oh, bias_oh)  # Shape (M,)
+    couplings = - 0.5 * torch.einsum('mi,ij,mj->m', x_oh, couplings_oh, x_oh)  # Shape (M,)
+
+    return field + couplings
+
+
+def get_freq_single_point(data, weights=None):
+    if weights is not None:
+        return (data * weights[:, None, None]).sum(dim=0)
+    else:
+        return data.mean(dim=0)
+
+
+def get_freq_two_points(data, weights=None):
+    M, L, q = data.shape
+    data_oh = data.reshape(M, q * L)
+    if weights is not None:
+        we_data_oh = data_oh * weights[:, None]
+    else:
+        we_data_oh = data_oh * 1./M
+    fij = we_data_oh.T @ data_oh  # Compute weighted sum
+    return fij.reshape(L, q, L, q)
 
 
 def get_one_hot(data, num_classes=5):
@@ -45,7 +81,7 @@ def family_stream(family_dir : str):
     """ Yield the output of load_msa function for each family directory """
     return [(index, family_file, os.path.join(family_dir, family_file, f"{family_file}.fasta"), len(os.listdir(family_dir))) for index, family_file in enumerate(os.listdir(family_dir))]
 
-def get_summary(files : str):
+def get_summary(files : str, _type : str):
     template = "{0:<30} {1:<50}"
     sequences = [str(record.seq) for record in SeqIO.parse(files, 'fasta')]
     seqs = Counter("".join(sequences))
@@ -54,8 +90,24 @@ def get_summary(files : str):
     for key, freq in seqs.items():
         print(template.format(key, freq))
     
-    shortest = max(sequences, key=lambda x : x.count('-'))
-    return seqs, shortest.count("-")/len(shortest), len(sequences[0])
+    if _type == 'shortest':
+        obj = max(sequences, key=lambda x : x.count('-'))
+        obj = obj.count("-")/len(obj)
+
+    if _type == 'longest':
+        obj = min(sequences, key=lambda x : x.count('-'))
+        obj = obj.count("-")/len(obj)
+
+    if _type == 'mean':
+        obj = np.mean([seq.count('-') for seq in sequences])   
+        obj = obj/len(sequences[0])
+
+    if _type == "custom":
+        obj = max(sequences, key=lambda x : x.count('-'))
+        obj = obj.count("-")/len(obj)
+        obj = obj*11/15
+
+    return seqs, obj, len(sequences[0])
 
 def save_samples(chains : torch.Tensor, chains_file : str, energies : torch.Tensor | None = None, headers : List[str] | None = None):
     N, _, _ = chains.shape
@@ -78,7 +130,7 @@ def save_params(infile : str, params : dict[str, torch.Tensor]):
         json.dump(params, json_writer)
 
 def load_params(params_file : str, 
-                device : str = 'cuda:0',
+                device : str = 'cpu',
                 dtype : torch.dtype = torch.float32):
     """
     Load the saved parameters of a previously trained model
@@ -89,12 +141,27 @@ def load_params(params_file : str,
     return {k : torch.tensor(v, device=device, dtype=dtype) for k,v in params.items()}
 
 
+def R2_model(            
+        fij: torch.Tensor,
+        pij: torch.Tensor,
+        fi: torch.Tensor,
+        pi: torch.Tensor):
+    
+    L, q = fi.shape
+
+    metric = tm.R2Score()
+    fij, pij = fij.reshape(L*q, L*q), pij.reshape(L*q, L*q)
+    metric.update(fij, pij)
+
+    return metric.compute().item()
+
+
 def extract_Cij_from_freq(
                         fij: torch.Tensor,
                         pij: torch.Tensor,
                         fi: torch.Tensor,
                         pi: torch.Tensor,
-                        ) -> Tuple[float, float]:
+                        ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Extracts the lower triangular part of the covariance matrices of the data and chains starting from the frequencies.
     """
@@ -134,6 +201,24 @@ def two_points_correlation(fij : torch.Tensor,
     pearson = torch.corrcoef(stack)[0, 1].item()
         
     return pearson
+
+
+def energy_corr(current_params : Dict[str, torch.Tensor],
+                current_chains : torch.Tensor,
+                nat_chains : torch.Tensor):
+    
+    
+    energy_nat = dca.compute_energy_confs(x=nat_chains, h_parms=current_params["fields"], j_parms=current_params["couplings"])
+    energy_chains = dca.compute_energy_confs(x=current_chains, h_parms=current_params["fields"], j_parms=current_params["couplings"])
+
+    num_chunks = energy_nat.shape[0]
+    L = energy_chains.shape[0] // num_chunks
+    chunks_chains = energy_chains[:num_chunks * L].reshape(-1, L).mean(dim=1)
+
+    stack = torch.stack([energy_nat, chunks_chains])
+    pearson_energy = torch.corrcoef(stack)[0,1].item()
+
+    return pearson_energy
 
 def set_zerosum_gauge(coupling : torch.Tensor):
     coupling -= coupling.mean(dim=1, keepdim=True) + \

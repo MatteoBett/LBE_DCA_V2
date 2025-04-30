@@ -24,38 +24,43 @@ def get_dist(frac_target : float,
     return distrib
 
 def get_target_gap_distribution(frac_target : float, 
-                                data_distrib : torch.Tensor, 
+                                f_single : torch.Tensor, 
                                 indel : bool = False,
                                 constant_bias : bool = False) -> torch.Tensor:
     """ Determines the target frequency distribution of gaps given an overall mean """
+    
+    fi_target_gap_distribution = f_single[:, 0].cpu()
     if indel is True and constant_bias is True:
         raise ValueError("Cannot have both indel and constant bias")
     
     if constant_bias:
-        distrib = torch.full((len(data_distrib),), fill_value=frac_target, dtype=torch.float32).cpu()
+        distrib = torch.full((len(fi_target_gap_distribution),), fill_value=frac_target, dtype=torch.float32).cpu()
         return distrib
 
     if indel:
-        del_dist, in_dist = torch.zeros((len(data_distrib), 1), dtype=torch.float32).cpu(), torch.zeros((len(data_distrib), 1), dtype=torch.float32).cpu()
-        _del = data_distrib < data_distrib.mean()
-        _in = data_distrib > data_distrib.mean()
+        del_dist, in_dist = torch.zeros((len(fi_target_gap_distribution), 1), dtype=torch.float32).cpu(), torch.zeros((len(fi_target_gap_distribution), 1), dtype=torch.float32).cpu()
+        _del = fi_target_gap_distribution < fi_target_gap_distribution.mean()
+        _in = fi_target_gap_distribution > fi_target_gap_distribution.mean()
         
         idx_del, idx_in = _del.nonzero(), _in.nonzero()
-        prop_del, prop_in = (len(idx_del)/len(data_distrib))*frac_target, (len(idx_in)/len(data_distrib))*frac_target
+        prop_del, prop_in = (len(idx_del)/len(fi_target_gap_distribution))*frac_target, (len(idx_in)/len(fi_target_gap_distribution))*frac_target
 
-        data_del = data_distrib.where(data_distrib >= data_distrib.mean(), 0)
-        data_in = data_distrib.where(data_distrib <= data_distrib.mean(), 0)
+        data_del = fi_target_gap_distribution.where(fi_target_gap_distribution >= fi_target_gap_distribution.mean(), 0)
+        data_in = fi_target_gap_distribution.where(fi_target_gap_distribution <= fi_target_gap_distribution.mean(), 0)
 
         del_dist = get_dist(frac_target=prop_del, data_distrib=data_del, distrib=del_dist)
         in_dist = get_dist(frac_target=prop_in, data_distrib=data_in, distrib=in_dist)
         return del_dist + in_dist
+
     else:
-        distrib = torch.zeros((len(data_distrib), 1), dtype=torch.float32).cpu()
-        return get_dist(frac_target=frac_target, data_distrib=data_distrib, distrib=distrib)
+        distrib = torch.zeros((len(fi_target_gap_distribution), 1), dtype=torch.float32).cpu()
+        return get_dist(frac_target=frac_target, data_distrib=fi_target_gap_distribution, distrib=distrib)
 
 def compute_gap_gradient(target_dist : torch.Tensor,
                          dist_sample : torch.Tensor,
                          params : Dict[str, torch.Tensor],
+                         S : torch.Tensor | None = None,
+                         adaptative : bool | None = None,
                          constant_bias : bool | None = None,
                          device : str = 'cpu'
                          ) -> torch.Tensor:
@@ -69,13 +74,24 @@ def compute_gap_gradient(target_dist : torch.Tensor,
     if constant_bias:
         target_dist = target_dist.mean().item()
         dist_sample = dist_sample.mean().item()
-    #print("before", params["gaps_bias"].shape)
 
-    loss = target_dist - dist_sample
+    if adaptative:
+        target_dist = target_dist.mean().item()
+        dist_sample = dist_sample.mean().item()
 
-    new_bias = params["gaps_lr"] * loss  # positive result
+        loss = target_dist - dist_sample
+        T = params["gaps_lr"] * loss
+
+    else:
+        loss = target_dist - dist_sample
+        new_bias = params["gaps_lr"] * loss  # positive result
+
     if constant_bias:
         params["gaps_bias"][:, 0] = torch.full(params["gaps_bias"][:, 0].shape, new_bias.item())
+    elif adaptative:
+        params["fields"][:, 0] = S*T
+        #params["fields"][:, 0] = torch.where(torch.isinf(params["fields"][:,0]), torch.tensor(-1e16, device=params["fields"][:,0].device), params["fields"][:,0])
+
     else:
         params["gaps_bias"][:, 0] = new_bias
 

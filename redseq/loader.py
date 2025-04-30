@@ -32,17 +32,17 @@ class DatasetDCA(Dataset):
         chains_biased_file : str | Path | None = None,
         chains_unbiased_file : str | Path | None = None,
         alphabet: str = '-AUCG',
-        device : str = "cuda"
+        device : str = "cpu"
     ):
         """
         Initialize the dataset.
         """
-        self.path_data = Path(path_data)
+        self.path_data = path_data
         self.device = device
-        self.chains_biased_file = Path(chains_biased_file) if chains_biased_file is not None else None
-        self.chains_unbiased_file = Path(chains_unbiased_file) if chains_unbiased_file is not None else None
-        self.params_file_biased = Path(params_file_biased) if chains_biased_file is not None else None
-        self.params_file_unbiased = Path(params_file_unbiased) if params_file_unbiased is not None else None
+        self.chains_biased_file = chains_biased_file if chains_biased_file is not None else None
+        self.chains_unbiased_file = chains_unbiased_file if chains_unbiased_file is not None else None
+        self.params_file_biased = params_file_biased if chains_biased_file is not None else None
+        self.params_file_unbiased = params_file_unbiased if params_file_unbiased is not None else None
 
         self.alphabet = alphabet
         self.dtype = torch.float32
@@ -111,13 +111,10 @@ def encode_sequence(seq : Bio.SeqRecord.Seq | torch.Tensor):
         return new
     
 
-
 def family_stream(family_dir : str):
     """ Yield the output of load_msa function for each family directory """
     for family_file in os.listdir(family_dir):
         yield family_file, os.path.join(family_dir, family_file, f"{family_file}.fasta")
-
-
 
 
 @torch.jit.script

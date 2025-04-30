@@ -3,6 +3,7 @@ from typing import List, Generator, Any
 from dataclasses import dataclass
 
 import torch
+import ViennaRNA as vrna
 
 import regex
 from Bio import SeqIO
@@ -56,3 +57,10 @@ def make_fasta(seqfile : str):
 
 #make_fasta(r'/home/mbettiati/LBE_MatteoBettiati/code/vdca/data/raw/Azoarcus/Azoarcus.fasta')
 
+def check_abstraction(path : str = r'/home/mbettiati/LBE_MatteoBettiati/code/vdca/data/raw/Artificial/Artificial.fasta'):
+    for record in SeqIO.parse(path, "fasta-pearson"):
+        ss, _ = vrna.fold(str(record.seq))
+        print(vrna.abstract_shapes(ss, 5))
+
+#generation using abstract shape level 4 or 5
+check_abstraction()

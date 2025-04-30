@@ -6,6 +6,11 @@ __pycache__/
 # C extensions
 *.so
 
+
+#annex scripts
+vaitea_dca.py
+vaitea_utils.py
+
 data/*
 output/*
 __pycache__/*

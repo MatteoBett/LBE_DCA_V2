@@ -5,6 +5,7 @@ import sample.loader as loader
 import sample.kmers as kmers
 import sample.analyse as viz
 import sample.simcalc as simcalc
+import sample.msastats as msastats
 
 def main(interpolation_dir : str, tmp_output : str, output_dir : str, k:int, natural_path : str):
     for family in os.listdir(interpolation_dir):
@@ -14,6 +15,8 @@ def main(interpolation_dir : str, tmp_output : str, output_dir : str, k:int, nat
         os.makedirs(outseq_path, exist_ok=True)
 
         getseq.main_getseq(genseq_path=genseq_path, tmp_output=tmp_output, outseq_path=outseq_path)
+        msastats.sim_nat_vs_gen(path_gen=genseq_path, path_nat=natural_path)
+
 
     for fam, batches in loader.stream_batches(family_dir=output_dir):
         batches = kmers.encode_batches(batches=batches, k=k)
@@ -28,6 +31,8 @@ def main(interpolation_dir : str, tmp_output : str, output_dir : str, k:int, nat
         pdf = viz.main_display(batches=batches, path_report=pdf_file, intra_clust=intra_clust, k=k, natural=natural_path)
 
         pdf.close()
+
+    
 
 
 if __name__ == "__main__":

@@ -7,10 +7,11 @@ import seaborn as sns
 import numpy as np
 import pandas as pd
 from Bio import SeqIO
+import torch
+import scipy.stats as sstats
 
 import sample.loader as loader
-from redseq.utils import load_params
-from redseq.dca import compute_energy_confs
+from redseq.utils import load_params, compute_energy_confs
 from redseq.loader import DatasetDCA
 
 
@@ -33,14 +34,15 @@ def get_length_distribution(batches : Dict[int, List[loader.SeqSlope]], pdf : bp
     fig.savefig(pdf, format='pdf')
     plt.close(fig)
 
-def get_energy_diff(params_path : str, natfile : str, binfile : str, pdf : bpdf.PdfPages):
+
+def get_energy_diff(dataset_natural : torch.Tensor, 
+                    dataset_binfile : torch.Tensor,
+                    params : Dict[str, torch.Tensor], 
+                    pdf : bpdf.PdfPages):
+    
     fig, ax = plt.subplots(2, 1, figsize=(14, 10))
-    dataset_natural = DatasetDCA(path_data=natfile, device="cpu").mat
-    dataset_binfile = DatasetDCA(path_data=binfile, device="cpu").mat
 
-    _, L, q = dataset_binfile.shape
-
-    params = load_params(params_file=params_path, device="cpu")
+    N, L, _ = dataset_binfile.shape
 
     energy_nat = compute_energy_confs(x=dataset_natural, h_parms=params["fields"], j_parms=params["couplings"]).numpy().flatten()
     energy_bin = compute_energy_confs(x=dataset_binfile, h_parms=params["fields"], j_parms=params["couplings"]).numpy().flatten()
@@ -55,7 +57,7 @@ def get_energy_diff(params_path : str, natfile : str, binfile : str, pdf : bpdf.
 
     datasets = {
         "energies_nat" : (energy_nat, gaps_nat.numpy().flatten()),
-        "energies_bin" : (energy_bin, gaps_bin.numpy().flatten()),
+        "energies_gen" : (energy_bin, gaps_bin.numpy().flatten()),
     }
 
     dist_dico = dict(zip(datasets.keys(), all_dist))
@@ -79,7 +81,8 @@ def get_energy_diff(params_path : str, natfile : str, binfile : str, pdf : bpdf.
     df = pd.DataFrame({"Dataset": labels, "Energies": energies, "% of Gaps": gaps})
     df_dist = pd.DataFrame({"Dataset": label, "% of Gaps": ngaps, "Density":count})
 
-    sns.scatterplot(df, x = '% of Gaps', y = "Energies", hue="Dataset", ax=ax[0], alpha=0.1, legend=False)
+    if N < 30000:
+        sns.scatterplot(df, x = '% of Gaps', y = "Energies", hue="Dataset", ax=ax[0], alpha=0.1, legend=False)
     sns.lineplot(df, x = '% of Gaps', y = "Energies", hue="Dataset", ax=ax[0], errorbar=('ci', 95), legend=True)
 
     sns.lineplot(df_dist, x="% of Gaps", y="Density", hue="Dataset", ax=ax[1], markers=True, legend=True)
@@ -91,7 +94,7 @@ def get_energy_diff(params_path : str, natfile : str, binfile : str, pdf : bpdf.
     fig.subplots_adjust(wspace=0.4)
     fig.savefig(pdf, format='pdf')
     plt.close(fig)
-
+    return energy_nat, energy_bin
 
 def show_intra_dist(intra_clust : Dict[int, List[float]], pdf : bpdf.PdfPages, k : int):
     idx = []
@@ -127,6 +130,7 @@ def show_inter_dist(batches : Dict[int, List[loader.SeqSlope]], pdf : bpdf.PdfPa
     fig.savefig(pdf, format='pdf')
     plt.close(fig)
 
+
 def main_display(path_report : str, 
                  batches : Dict[int, List[loader.SeqSlope]], 
                  intra_clust : Dict[int, List[float]], 
@@ -134,7 +138,7 @@ def main_display(path_report : str,
                  natural : str) -> bpdf.PdfPages:
     pdf = bpdf.PdfPages(path_report)
 
-    """get_length_distribution(batches=batches, pdf=pdf, natural=natural)
+    get_length_distribution(batches=batches, pdf=pdf, natural=natural)
 
     show_intra_dist(intra_clust=intra_clust, pdf=pdf, k=k)
 
@@ -143,8 +147,8 @@ def main_display(path_report : str,
                     binfile=r'/home/mbettiati/LBE_MatteoBettiati/code/vdca/output/sampled_seq/Azoarcus/Azoarcus.fasta',
                     pdf=pdf
                     )
-    """
-    show_inter_dist(batches=batches, pdf=pdf, k=k)
+
+    #show_inter_dist(batches=batches, pdf=pdf, k=k)
 
     return pdf
 

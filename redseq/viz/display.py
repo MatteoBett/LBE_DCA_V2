@@ -2,7 +2,7 @@
 #                        std Lib                        #
 #########################################################
 import os, sys, re
-from typing import List
+from typing import List, Dict
 from collections import Counter
 
 #########################################################
@@ -17,24 +17,26 @@ import pandas as pd
 import seaborn as sns
 import numpy as np
 import torch
+import scipy.stats as sstats
+import matplotlib.patches as mpatches
 
 #########################################################
 #                      Own modules                      #
 #########################################################
 from redseq.secondary_structures.make_struct import walk_seq
 import redseq.loader as loader
-import redseq.dca as dca
 import redseq.utils as utils
 import benchmark.benchmark_display as bdisplay
 import redseq.stats as stats
 import sample.analyse as analyse
+import redseq.loader as loader
 
 sns.set_theme('paper')
 matplotlib.use('pdf') 
 
 def get_summary(all_fam_dir : str):
     template = "{0:<30} {1:<50}"
-    for path, directories, files in os.walk(all_fam_dir):
+    for path, _, files in os.walk(all_fam_dir):
         if files != []:
             for f in files:
                 print(f.split('.')[0])
@@ -105,8 +107,8 @@ def homology_vs_gaps(chains_file_ref : str,
                      fig_dir : str,
                      params_path_unbiased : str,
                      params_path_biased : str,
+                     eval_method : str,
                      indel : bool = False,
-                     alphabet : str = 'rna',
                      constant : bool = False,
                      fixed_gaps : bool = False,
                      bin : int | None = None,
@@ -124,28 +126,58 @@ def homology_vs_gaps(chains_file_ref : str,
 
     char = "-"
     print("starting report")
-       
-    path_pdf = os.path.join(fig_dir, f'EDA_{indel}_{bin}.pdf') if bin is not None else os.path.join(fig_dir, f'EDA_{indel}.pdf')
-    pdf = bpdf.PdfPages(path_pdf)
-
-    analyse.get_energy_diff(params_path=params_path_unbiased, natfile=infile_path, binfile=chains_file_ref, pdf=pdf)
-    analyse.get_energy_diff(params_path=params_path_biased, natfile=infile_path, binfile=chains_file_bias, pdf=pdf)
-
-    """gaps_freq_heatmap(chains_file_ref=chains_file_ref, 
-                      infile_path=infile_path, 
-                      chains_file_bias=chains_file_bias, 
-                      pdf=pdf,char=char, 
-                      alphabet=alphabet)
-
-    gaps_Fapc_heatmap(params_path_unbiased=params_path_unbiased, 
-                         params_path_biased=params_path_biased,
-                         pdf=pdf)
-
-    gap_coupling_heatmap(params_path_biased=params_path_biased,
-                         pdf=pdf, 
-                         char=char)
 
     null_model = os.path.join(os.path.dirname(chains_file_bias), f"null_model0_{bin}.fasta") if bin is not None else os.path.join(os.path.dirname(chains_file_bias), f"null_model0.fasta")  
+    path_pdf = os.path.join(fig_dir, f'EDA_{indel}_{bin}.pdf') if bin is not None else os.path.join(fig_dir, f'EDA_{indel}.pdf')
+    print(path_pdf)
+
+    pdf = bpdf.PdfPages(path_pdf)
+
+    dataset_null= loader.DatasetDCA(null_model).mat
+    dataset_biased = loader.DatasetDCA(chains_file_bias).mat
+    dataset_unbiased = loader.DatasetDCA(chains_file_ref).mat
+    dataset_nat = loader.DatasetDCA(infile_path).mat
+
+    p_unbiased = utils.load_params(params_file=params_path_unbiased)
+    p_biased = utils.load_params(params_file=params_path_biased)
+
+    Corrplot(dataset_nat=dataset_nat,
+             dataset_null=dataset_null,
+             dataset_biased=dataset_biased,
+             dataset_unbiased=dataset_unbiased,
+             fig_dir=fig_dir,
+             eval_method=eval_method,
+             pdf=pdf)
+    
+    energies_nat_p_unbiased, energies_unbiased=analyse.get_energy_diff(dataset_natural=dataset_nat, dataset_binfile=dataset_unbiased, params=p_unbiased, pdf=pdf)
+    energies_nat_p_biased, energies_biased=analyse.get_energy_diff(dataset_natural=dataset_nat, dataset_binfile=dataset_biased, params=p_biased, pdf=pdf)
+
+    energy_ttest(energies_nat_p_unbiased=energies_nat_p_unbiased,
+                 energies_biased=energies_biased,
+                 energies_nat_p_biased=energies_nat_p_biased,
+                 energies_unbiased=energies_unbiased,
+                 pdf=pdf)
+
+    mypca(dataset_nat=dataset_nat,
+        dataset_null=dataset_null,
+        dataset_biased=dataset_biased,
+        dataset_unbiased=dataset_unbiased,
+        pdf=pdf)
+    
+    gaps_freq_heatmap(dataset_biased=dataset_biased,
+                      dataset_natural=dataset_nat,
+                      dataset_unbiased=dataset_unbiased,
+                      pdf=pdf)
+
+    gaps_Fapc_heatmap(p_unbiased=p_unbiased,
+                      p_biased=p_biased,
+                      pdf=pdf)
+
+    gap_coupling_heatmap(params_biased=p_biased,
+                         pdf=pdf, 
+                         char=char)
+    
+    """
     show_contribution_profiles(
         path_null_model=null_model,
         path_natural_sequences=infile_path,
@@ -157,6 +189,158 @@ def homology_vs_gaps(chains_file_ref : str,
     print('report finished')
     pdf.close()
 
+def mypca(dataset_nat : torch.Tensor, 
+        dataset_null : torch.Tensor,
+        dataset_biased : torch.Tensor,
+        dataset_unbiased : torch.Tensor,
+        pdf : bpdf.PdfPages,
+        dim : int = 2):
+
+    X_nat = dataset_nat.reshape(dataset_nat.shape[0], dataset_nat.shape[1]*dataset_nat.shape[2])
+    X_null = dataset_null.reshape(dataset_null.shape[0], dataset_null.shape[1]*dataset_null.shape[2])
+    X_biased = dataset_biased.reshape(dataset_biased.shape[0], dataset_biased.shape[1]*dataset_biased.shape[2])
+    X_unbiased = dataset_unbiased.reshape(dataset_unbiased.shape[0], dataset_unbiased.shape[1]*dataset_unbiased.shape[2])
+
+    matrices = [X_nat, X_null, X_biased, X_unbiased]
+    X_nat_centered = X_nat - X_nat.mean(axis=0)
+    _, S_nat, _ = np.linalg.svd(X_nat_centered, full_matrices=False)
+
+    PCs = {"nat":None, "null":None, "biased":None, "unbiased":None}
+    for index, X in enumerate(matrices):
+        X_centered = X - X.mean(axis=0)
+        U, _, _ = np.linalg.svd(X_centered, full_matrices=False)
+
+        PCs[list(PCs.keys())[index]] = (U[:, :dim]) * S_nat[:dim]
+        print(PCs[list(PCs.keys())[index]].shape)
+
+    fig, axes = plt.subplots(1, 4, figsize=(16,4))
+    for index, (key, PC) in enumerate(PCs.items()):
+        if PC.shape[0] > 20000:
+            heatmap, _, _ = np.histogram2d(PC[:, 0], PC[:, 1], bins=75, density=True)
+            axes[index].imshow(heatmap.T, origin='lower', cmap='hot', aspect='auto')     
+        else:
+            axes[index].scatter(PC[:, 0], PC[:, 1], alpha=0.3)
+        axes[index].set_title(f"PCA of {key} sequences")
+        axes[index].set_xlabel("PC 1")
+        axes[index].set_ylabel("PC 2")
+        
+    fig.subplots_adjust(wspace=0.4)
+    fig.savefig(pdf, format="pdf")
+    plt.close(fig)
+
+    return 
+
+
+def energy_ttest(energies_nat_p_unbiased : np.ndarray,
+                 energies_nat_p_biased : np.ndarray,
+                 energies_unbiased : np.ndarray,
+                 energies_biased : np.ndarray, 
+                 pdf : bpdf.PdfPages):
+
+    """ Null hypothesis tested: the two samples (natural vs generated) have identical expected values, for each bias condition. """   
+
+    nat_unbiased = energies_nat_p_unbiased.flatten()
+    gen_unbiased = energies_unbiased.flatten()
+    nat_biased = energies_nat_p_biased.flatten()
+    gen_biased = energies_biased.flatten()
+
+    p_unbiased = sstats.ttest_ind(a=nat_unbiased, b=gen_unbiased, equal_var=False).pvalue
+    p_biased = sstats.ttest_ind(a=nat_biased, b=gen_biased, equal_var=False).pvalue
+
+    df = pd.DataFrame({
+        "Energy": np.concatenate([gen_unbiased, gen_biased]),
+        "Dataset": (["Generated"] * len(gen_unbiased) +
+                    ["Generated"] * len(gen_biased)),
+        "Bias": (["Unbiased"] * len(gen_unbiased) +
+                 ["Biased"] * len(gen_biased))
+    })
+    df_nat = pd.DataFrame({
+        "Energy": np.concatenate([nat_unbiased, nat_biased]),
+        "Dataset": (["Natural"] * len(nat_unbiased) +
+                    ["Natural"] * len(nat_biased)),
+        "Bias": (["Unbiased"] * (len(nat_unbiased)) +
+                 ["Biased"] * (len(nat_biased)))
+    })
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
+
+
+    for i, bias in enumerate(["Unbiased", "Biased"]):
+        sns.histplot(
+            data=df[df["Bias"] == bias],
+            x="Energy", hue="Dataset", kde=True, bins=50, ax=axes[i],
+            element="step", stat="density", palette="tab10", legend=False
+        )
+        sns.histplot(
+            data=df_nat[df_nat["Bias"] == bias],
+            x="Energy", hue="Dataset", kde=True, bins=50, ax=axes[i],
+            element="step", stat="density", palette='hls', legend=False
+        )
+        axes[i].set_title(f"{bias} Sequences\np-value = {p_unbiased if bias=='Unbiased' else p_biased:.2e}")
+        axes[i].set_xlabel("Energy")
+        axes[i].set_ylabel("Density")
+
+    # Custom legend
+    legend_handles = [
+        mpatches.Patch(color=sns.color_palette("tab10")[0], label="Generated"),
+        mpatches.Patch(color=sns.color_palette("hls")[0], label="Natural")
+    ]
+    fig.legend(handles=legend_handles, loc=[0.42,0.85], ncol=2, fontsize='large')
+
+    fig.suptitle("Independent T-Tests: Natural vs Generated Sequences", fontsize=16)
+    fig.tight_layout(rect=[0, 0, 1, 0.95])  # Adjust layout to accommodate legend
+    fig.savefig(pdf, format='pdf')
+    plt.close(fig)
+
+
+
+def Corrplot(dataset_nat : torch.Tensor, 
+             dataset_null : torch.Tensor,
+             dataset_biased : torch.Tensor,
+             dataset_unbiased : torch.Tensor,
+             fig_dir : str,
+             eval_method :str,
+             pdf : bpdf.PdfPages
+             ):
+
+    nat_i, nat_ij = utils.get_freq_single_point(data=dataset_nat), utils.get_freq_two_points(data=dataset_nat)
+    null_i, null_ij = utils.get_freq_single_point(data=dataset_null), utils.get_freq_two_points(data=dataset_null)
+    biased_i, biased_ij = utils.get_freq_single_point(data=dataset_biased), utils.get_freq_two_points(data=dataset_biased)
+    unbiased_i, unbiased_ij = utils.get_freq_single_point(data=dataset_unbiased), utils.get_freq_two_points(data=dataset_unbiased)
+
+    Cij_null = utils.extract_Cij_from_freq(fij=nat_ij, fi=nat_i, pi=null_i, pij=null_ij)
+    Cij_biased = utils.extract_Cij_from_freq(fij=nat_ij, fi=nat_i, pi=biased_i, pij=biased_ij)
+    Cij_unbiased = utils.extract_Cij_from_freq(fij=nat_ij, fi=nat_i, pi=unbiased_i, pij=unbiased_ij)
+
+
+    corrlist = [Cij_null, Cij_biased, Cij_unbiased]
+    freqlist = [null_ij.ravel(), biased_ij.ravel(), unbiased_ij.ravel()]
+    nat_ij = nat_ij.ravel()
+
+    labelist = ["null", "biased", "unbiased"]
+    fig, axes = plt.subplots(1, 3, figsize=(18,5))
+    fig2, axes2 = plt.subplots(1, 3, figsize=(18,5))
+    for i, ax in enumerate(axes):
+        ax.scatter(corrlist[i][1], corrlist[i][0],)
+
+        ax.set_xlabel(f"Cij of {labelist[i]}")
+        ax.set_ylabel("Cij Natural")
+        ax.set_title(f"Model trained at {eval_method}=0.95")        
+
+        axes2[i].scatter(freqlist[i], nat_ij, color='r')
+
+        axes2[i].set_xlabel(f"fij of {labelist[i]}")
+        axes2[i].set_ylabel("fij Natural")
+        axes2[i].set_title(f"Model trained at {eval_method}=0.95")
+
+    fig.subplots_adjust(wspace=0.4)
+    fig.savefig(os.path.join(fig_dir, "Cross-correlation.png"))
+    plt.close(fig)
+        
+    fig2.subplots_adjust(wspace=0.4)
+    fig2.savefig(os.path.join(fig_dir, "Correlation_pearson.png"))
+    plt.close(fig)
+        
 
 def show_contribution_profiles(path_null_model : str, 
                                path_natural_sequences : str,
@@ -245,11 +429,9 @@ def mean_ci(series):
     return mean, ci
 
 
-def gaps_Fapc_heatmap(params_path_unbiased : str,
-                    params_path_biased : str,
-                    pdf):
-    p_unbiased = utils.load_params(params_file=params_path_unbiased)
-    p_biased = utils.load_params(params_file=params_path_biased)
+def gaps_Fapc_heatmap(p_unbiased : str,
+                      p_biased : str,
+                      pdf):
     
     Fapc_unbias = utils.frob_norm(p_unbiased).cpu()
     Fapc_bias = utils.frob_norm(p_biased).cpu()
@@ -266,90 +448,45 @@ def gaps_Fapc_heatmap(params_path_unbiased : str,
     return
 
 def gaps_freq_heatmap(
-                     chains_file_ref : str, 
-                     infile_path : str,
-                     chains_file_bias : str,
-                     pdf,
-                     char : str,
-                     alphabet : str = 'rna',
-                     double : bool = False):
-    
-    
-    translate = {0: '-', 1: 'A', 2: 'U', 3: 'C', 4: 'G'}
-
-    if double:
-        infile_path = re.sub("indel", 'raw', infile_path)
-
-    dataset_ref = loader.DatasetDCA(infile_path, alphabet=alphabet)
-    dataset_biased = loader.DatasetDCA(chains_file_bias, alphabet=alphabet)
-    dataset_unbiased = loader.DatasetDCA(chains_file_ref, alphabet=alphabet)
+                     dataset_natural : torch.Tensor, 
+                     dataset_biased : torch.Tensor,
+                     dataset_unbiased : torch.Tensor,
+                     pdf : bpdf.PdfPages):
     
     fig, axes = plt.subplots(1, 1, figsize=(18,5))
-    ref_count_gaps, mean_ref = dataset_ref.get_indels_info()
-    biased_count_gaps, mean_bias = dataset_biased.get_indels_info()
-    unbiased_count_gaps, mean_unias = dataset_unbiased.get_indels_info()
 
-    for values in [ref_count_gaps, biased_count_gaps, unbiased_count_gaps]:
-        axes.plot(list(range(len(values))), values.values())
-    axes.hlines([mean_ref, mean_bias, mean_unias], xmin = 0, xmax=len(ref_count_gaps), 
+    gaps_nat = dataset_natural[:, :, 0].sum(dim=0)/dataset_natural.shape[0]
+    gaps_biased = dataset_biased[:, :, 0].sum(dim=0)/dataset_biased.shape[0]
+    gaps_unbiased = dataset_unbiased[:, :, 0].sum(dim=0)/dataset_unbiased.shape[0]
 
-                   colors=['C0', 'C1', 'C2'])
-    
-    axes.legend(labels=['ref', 'bias', ' unbias'])
+    names = ["dist_nat", "dist_biased", "dist_unbiased"]
+        
+    dist_dico = dict(zip(names, [gaps_nat, gaps_biased, gaps_unbiased]))
+
+    dist = []
+    index = []
+    label = []
+    for key, val in dist_dico.items():
+        dist.extend(val.numpy().flatten())
+        index.extend(np.arange(0, len(val), dtype=np.int32))
+        label.extend([key]* len(val))
+
+    df_dist = pd.DataFrame({"Dataset": label, "% of Gaps": dist, "position":index})
+
+    sns.lineplot(df_dist, x="position", y="% of Gaps", hue="Dataset", ax=axes, markers=True, legend=True)
+
+    axes.legend()
     axes.set_title("Gaps' frequency depending on position in the MSA's sequences")
     axes.set_xlabel("Sequence position")
     axes.set_ylabel("Gap frequency")
 
-    fig.subplots_adjust(wspace=0.2)
     fig.savefig(pdf, format='pdf')
     plt.close(fig)   
-    return 
-    seqref = dataset_ref.mat
-    seqbiased = dataset_biased.mat
-    sequnbiased = dataset_unbiased.mat
 
-    M, L, q = seqref.shape
-
-    f2p_ref = dca.get_freq_two_points(data=seqref).cpu()
-    f2p_biased = dca.get_freq_two_points(data=seqbiased).cpu()
-    f2p_unbiased = dca.get_freq_two_points(data=sequnbiased).cpu()
-
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-    sns.heatmap(f2p_unbiased[:, 0, :, 0], cmap="magma", cbar=True, ax=axes[0], vmin=0,  vmax=1)
-    sns.heatmap(f2p_ref[:, 0, :, 0], cmap="magma", cbar=True, ax=axes[1], vmax=1, vmin=0)
-    sns.heatmap(f2p_biased[:, 0, :, 0], cmap="magma", cbar=True, ax=axes[2], vmax=1, vmin=0)
-
-    axes[0].set_title("Unbiased generated gaps' frequency")
-    axes[1].set_title("Reference data gaps' frequency")
-    axes[2].set_title("Biased generated data gaps' frequency")
+def gap_coupling_heatmap(params_biased : Dict[str, torch.Tensor],
+                         pdf,
+                         char : str):
     
-    fig.subplots_adjust(wspace=0.2)
-    fig.savefig(pdf, format='pdf')
-    plt.close(fig)
-
-    dico_f2p = dict(zip(["Unbiased", 'ref', "biased"],[f2p_unbiased, f2p_ref, f2p_biased]))
-    
-    for name, f2p in dico_f2p.items():
-        fig, axes = plt.subplots(1, len(translate) - 1, figsize=(19, 5))
-        for i in range(1, q):
-            sns.heatmap(f2p[:, 0, :, i], cmap="magma", cbar=True, ax=axes[i-1])
-            axes[i-1].set_title(f"Frequency heatmap {char}/{translate[i]}")
-            axes[i-1].set_xlabel(f"{translate[i]} Position")
-            axes[i-1].set_ylabel(f"Gaps (-) position")
-
-            fig.suptitle(f'Frequency heatmap for {name}', fontsize=16, fontweight='bold')
-
-        fig.tight_layout()
-        fig.subplots_adjust(wspace=0.4)
-        fig.savefig(pdf, format='pdf')
-        plt.close(fig)
-
-def gap_coupling_heatmap(params_path_biased : str,
-                        pdf,
-                        char : str):
-        
-    params_biased = utils.load_params(params_file=params_path_biased, device='cpu')
-
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
     Fapc_bias = utils.frob_norm(params=params_biased).cpu()
 
