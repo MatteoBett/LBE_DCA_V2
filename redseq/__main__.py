@@ -82,6 +82,10 @@ def main(infile : str,
          adaptative : bool,
          plotting : bool,
          family_fig_dir : str,
+         nseqs : int,
+         scan : bool,
+         scanrange : List[int],
+         beta : float,
          interpolation_targets : List[float] | None = None,
          full_interpolation : bool | None = None,
          ):
@@ -97,16 +101,15 @@ def main(infile : str,
                          chains_unbiased_file=sample_seq_unbiased,
                          device='cpu')
 
-    n_chains = 10000
+    n_chains = nseqs
     nb_sweep = 10
-    beta = 1.0
+    beta = beta
     dca.fit_model(dataset=dataset, 
                   max_step=max_steps, 
                   min_eval=min_eval,
                   N=n_chains,
                   nb_gibbs=nb_sweep,
                   lr=lr, 
-                  beta=beta,
                   eval_method=eval_method)
     
     dca.sample_trained(dataset=dataset,
@@ -126,15 +129,18 @@ def main(infile : str,
                        interpolation_targets=interpolation_targets,
                        full_interpolation=full_interpolation,
                        plotting=plotting,
-                       family_fig_dir=family_fig_dir)
+                       family_fig_dir=family_fig_dir,
+                       scan=scan,
+                       scanrange=scanrange)
 
 def save_params():
-    params = utils.load_params(params_file=r'/home/mbettiati/LBE_MatteoBettiati/code/vdca/output/sequences/interpolation/Azoarcus/non_biased/params0_0.json') 
+    params = utils.load_params(params_file=r'/home/mbettiati/LBE_MatteoBettiati/code/vdca/output/sequences/interpolation_constant/Azoarcus/non_biased/params0.json') 
 
     torch.save(params["couplings"], f=r'/home/mbettiati/LBE_MatteoBettiati/code/vdca/couplings_unbiased.pt')
     torch.save(params["fields"], f=r'/home/mbettiati/LBE_MatteoBettiati/code/vdca/fields_unbiased.pt')
 
 if __name__ == "__main__":
+    save_params()
     base_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
     parser = argparse.ArgumentParser(description='Samples from a DCA model.')
 
@@ -147,6 +153,7 @@ if __name__ == "__main__":
     parser.add_argument('-g', '--gaps_fraction', help='Targetted average gap fraction in the generated sequences', type=float, nargs='+', default=[])
     parser.add_argument('-s', '--sample_iterations', help="The maximum number of sample iterations to perform", type=int, default=150)
     parser.add_argument('-e', '--eval_method', help='Choose evaluation method for convergence. Currently supported: R2 and pearson. Default: pearson', type=str, default='pearson')
+    parser.add_argument('-n', '--nseqs', help='Number of sequences to generate', type=int, default=10000)
 
     parser.add_argument('--do_one', help="If True, only one family will be processed", type=bool, default=False)
     parser.add_argument('-p', '--plotting', help='If True then the pdf report is generated', type=bool, default=True)
@@ -154,6 +161,9 @@ if __name__ == "__main__":
     parser.add_argument("-b", '--bias', help='Bias the gaps distribution', type=bool, default=False)
     parser.add_argument("-c", '--constant_bias', help="Apply a constant bias on the data", type=bool, default=False)
     parser.add_argument("-d", '--indel', help="Indicate whether to discriminate between types of gaps.", type=bool, default=False)
+    parser.add_argument("--temperature", help="Choose temperature value.", type=float, default=1.0)
+    parser.add_argument("--scan", help="Indicates scan mode of bias", type=bool, default=False)
+    parser.add_argument("--scanrange", help="Linear scan in the given range of values followed by the number of desired values.", type=float, nargs=3, default=[-7, 2, 50])
     parser.add_argument('--adaptative', help="Adaptative gap bias", type=bool, default=False)
     parser.add_argument('--seq_fraction', help="Indicates the fraction of sequences used in the modelling", type=int, default=0)
     parser.add_argument('--fixed_gaps', help="Fixes the most occurring gaps in the alignment corresponding to the designated bias and explore the sequence space for those.", type=bool, default=False)
@@ -169,6 +179,7 @@ if __name__ == "__main__":
     alphabet = args.alphabet
     target_pearson = args.target_pearson
     max_steps = args.max_steps
+    nseqs = args.nseqs
     lr = args.learning_rate
     gaps_fraction = args.gaps_fraction 
     seqs_fraction = args.seq_fraction
@@ -180,7 +191,7 @@ if __name__ == "__main__":
     run_generation = args.run_generation
     full_interpolation = args.full_interpolation
     interpolation_bins = args.interpolation_bin_size
-    fixed_gaps = args.fixed_gaps
+    fixed_gaps = args.fixed_gaps  
 
     bias = args.bias 
     indel = args.indel
@@ -188,25 +199,37 @@ if __name__ == "__main__":
     famlist = utils.family_stream(family_dir=family_dir)
     use_min = False
     eval_method = args.eval_method
+    scan = args.scan
+    scanrange = args.scanrange
     interpolation_start, interpolation_end = args.interpolation_range
     interpolation_targets = None
     
+    beta = args.temperature
+
     if bias:
         if len(gaps_fraction) <= 1:
             use_min = True
     else:
         gaps_fraction = [0]*len(famlist)
 
-    if constant_bias:
+    if (constant_bias and not full_interpolation):
         out = "constant"
-    elif fixed_gaps:
+    elif (fixed_gaps and not full_interpolation):
         out = "fixed_gaps"
-    elif indel:
+    elif (indel and not full_interpolation):
         out = 'indel'
     elif adaptative and not full_interpolation:
         out = "adaptative"
+    elif scan and not full_interpolation:
+        out = f"scan_T_{"_".join(str(beta).split("."))}"
+    elif indel and full_interpolation:
+        out = 'indel'
     elif full_interpolation and adaptative:
-        out = "interpolation"
+        out = "interpolation_adaptative"
+    elif full_interpolation and fixed_gaps:
+        out = "interpolation_fixed"
+    elif full_interpolation and constant_bias:
+        out = "interpolation_constant"
     else:
         out = 'raw'
 
@@ -258,7 +281,11 @@ if __name__ == "__main__":
                 full_interpolation=full_interpolation,
                 interpolation_targets=interpolation_targets,
                 plotting=plotting,
-                family_fig_dir=family_fig_dir
+                family_fig_dir=family_fig_dir,
+                nseqs=nseqs,
+                beta=beta,
+                scan=scan,
+                scanrange=scanrange
             )
 
         biased_seqs = os.path.join(outdir, "sequences", out, family_file.split('.')[0], "biased", f"genseq{seqs_fraction}.fasta")

@@ -30,6 +30,7 @@ import benchmark.benchmark_display as bdisplay
 import redseq.stats as stats
 import sample.analyse as analyse
 import redseq.loader as loader
+import redseq.secondary_structures.validate as val
 
 sns.set_theme('paper')
 matplotlib.use('pdf') 
@@ -111,6 +112,7 @@ def homology_vs_gaps(chains_file_ref : str,
                      indel : bool = False,
                      constant : bool = False,
                      fixed_gaps : bool = False,
+                     adaptative : bool = False,
                      bin : int | None = None,
                      ):
     
@@ -121,6 +123,8 @@ def homology_vs_gaps(chains_file_ref : str,
         indel = "constant"
     elif fixed_gaps:
         indel = "fixed"
+    elif adaptative:
+        indel = "adaptative"
     else:
         indel = "gaps"
 
@@ -147,10 +151,11 @@ def homology_vs_gaps(chains_file_ref : str,
              dataset_unbiased=dataset_unbiased,
              fig_dir=fig_dir,
              eval_method=eval_method,
+             num=bin,
              pdf=pdf)
     
-    energies_nat_p_unbiased, energies_unbiased=analyse.get_energy_diff(dataset_natural=dataset_nat, dataset_binfile=dataset_unbiased, params=p_unbiased, pdf=pdf)
-    energies_nat_p_biased, energies_biased=analyse.get_energy_diff(dataset_natural=dataset_nat, dataset_binfile=dataset_biased, params=p_biased, pdf=pdf)
+    energies_nat_p_unbiased, energies_unbiased=get_energy_diff(dataset_natural=dataset_nat, dataset_binfile=dataset_unbiased, params=p_unbiased, pdf=pdf)
+    energies_nat_p_biased, energies_biased=get_energy_diff(dataset_natural=dataset_nat, dataset_binfile=dataset_biased, params=p_biased, pdf=pdf)
 
     energy_ttest(energies_nat_p_unbiased=energies_nat_p_unbiased,
                  energies_biased=energies_biased,
@@ -176,8 +181,17 @@ def homology_vs_gaps(chains_file_ref : str,
     gap_coupling_heatmap(params_biased=p_biased,
                          pdf=pdf, 
                          char=char)
+    print('report finished')
     
     """
+    print("starting secondary structure validation")
+    val.main(path_unbiased=chains_file_ref, 
+            path_natural=infile_path,
+            path_biased=chains_file_bias,
+            path_artificial=r'/home/mbettiati/LBE_MatteoBettiati/code/vdca/data/raw/Artificial/Artificial.fasta',
+            pdf=pdf)
+    
+    
     show_contribution_profiles(
         path_null_model=null_model,
         path_natural_sequences=infile_path,
@@ -185,9 +199,71 @@ def homology_vs_gaps(chains_file_ref : str,
         params_path_biased=params_path_unbiased,
         pdf=pdf        
     )"""
+
+    pdf.close()    
+
+
+def get_energy_diff(dataset_natural : torch.Tensor, 
+                    dataset_binfile : torch.Tensor,
+                    params : Dict[str, torch.Tensor], 
+                    pdf : bpdf.PdfPages):
     
-    print('report finished')
-    pdf.close()
+    fig, ax = plt.subplots(2, 1, figsize=(14, 10))
+
+    N, L, _ = dataset_binfile.shape
+
+    energy_nat = utils.compute_energy_confs(x=dataset_natural, h_parms=params["fields"], j_parms=params["couplings"]).numpy().flatten()
+    energy_bin = utils.compute_energy_confs(x=dataset_binfile, h_parms=params["fields"], j_parms=params["couplings"]).numpy().flatten()
+
+    gaps_nat = dataset_natural[:, :, 0].sum(dim=1)
+    gaps_bin = dataset_binfile[:, :, 0].sum(dim=1)
+
+    dist_nat = gaps_nat.unique(return_counts=True)
+    dist_bin = gaps_bin.unique(return_counts=True)
+
+    all_dist = [(ngaps/L, count/count.sum()) for ngaps, count in [dist_nat, dist_bin]]
+
+    datasets = {
+        "energies_nat" : (energy_nat, gaps_nat.numpy().flatten()),
+        "energies_gen" : (energy_bin, gaps_bin.numpy().flatten()),
+    }
+
+    dist_dico = dict(zip(datasets.keys(), all_dist))
+
+    energies = []
+    gaps = []
+    labels = []
+    for key, val in datasets.items():
+        energies.extend(val[0])
+        gaps.extend(val[1]/L)
+        labels.extend([key] * len(val[0]))
+
+    ngaps = []
+    count = []
+    label = []
+    for key, val in dist_dico.items():
+        ngaps.extend(val[0].numpy().flatten())
+        count.extend(val[1].numpy().flatten())
+        label.extend([key]* len(val[0]))
+
+    df = pd.DataFrame({"Dataset": labels, "Energies": energies, "% of Gaps": gaps})
+    df_dist = pd.DataFrame({"Dataset": label, "% of Gaps": ngaps, "Density":count})
+
+    if N < 30000:
+        sns.scatterplot(df, x = '% of Gaps', y = "Energies", hue="Dataset", ax=ax[0], alpha=0.1, legend=False)
+    sns.lineplot(df, x = '% of Gaps', y = "Energies", hue="Dataset", ax=ax[0], errorbar=('ci', 95), legend=True)
+
+    sns.lineplot(df_dist, x="% of Gaps", y="Density", hue="Dataset", ax=ax[1], markers=True, legend=True)
+    
+    ax[0].set_xlabel("% of gaps")
+    ax[0].set_ylabel("DCA Energy")
+    ax[0].legend(title="Dataset")
+
+    fig.subplots_adjust(wspace=0.4)
+    fig.savefig(pdf, format='pdf')
+    plt.close(fig)
+    return energy_nat, energy_bin
+
 
 def mypca(dataset_nat : torch.Tensor, 
         dataset_null : torch.Tensor,
@@ -300,6 +376,7 @@ def Corrplot(dataset_nat : torch.Tensor,
              dataset_unbiased : torch.Tensor,
              fig_dir : str,
              eval_method :str,
+             num :str,
              pdf : bpdf.PdfPages
              ):
 
@@ -334,11 +411,11 @@ def Corrplot(dataset_nat : torch.Tensor,
         axes2[i].set_title(f"Model trained at {eval_method}=0.95")
 
     fig.subplots_adjust(wspace=0.4)
-    fig.savefig(os.path.join(fig_dir, "Cross-correlation.png"))
+    fig.savefig(os.path.join(fig_dir, f"{num}_Cross-correlation.png"))
     plt.close(fig)
         
     fig2.subplots_adjust(wspace=0.4)
-    fig2.savefig(os.path.join(fig_dir, "Correlation_pearson.png"))
+    fig2.savefig(os.path.join(fig_dir, f"{num}_Correlation_pearson.png"))
     plt.close(fig)
         
 

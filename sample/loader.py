@@ -29,36 +29,34 @@ def family_stream(family_dir : str):
         yield family_file, os.path.join(family_dir, family_file, f"{family_file}.fasta")
 
 
-def stream_batches(family_dir : str) -> Generator[str, Dict[int, List[SeqSlope]], Any]:
+def stream_batches(infile_path : str) -> Generator[str, Dict[int, List[SeqSlope]], Any]:
     """
     Batches the sequences contained in the family file by their size. 
     """
-    for family_name, infile_path in family_stream(family_dir=family_dir):
-        batches = {}
-        k = []
-        for index, record in enumerate(SeqIO.parse(handle=infile_path, format="fasta-pearson")):
-            seq = str(record.seq)
-            size = len(seq) - seq.count('-')
-            if size not in batches.keys():
-                seq = re.sub("-", "", seq)
-                batches[size] = [SeqSlope(
-                    header=record.description,
-                    seq=seq,
-                    secondary_structure="",
-                    encoded=[],
-                    ss_encoded=[],
-                    cluster_seq=[],
-                    targets={}
-                )]
-            else:
-                seq = re.sub("-", "", seq)
-                batches[size].append(SeqSlope(
-                    header=record.description,
-                    seq=seq,
-                    secondary_structure="",
-                    encoded=[],
-                    ss_encoded=[],
-                    cluster_seq=[],
-                    targets={}
-                ))
-        yield family_name, batches
+    batches = {}
+    for _, record in enumerate(SeqIO.parse(handle=infile_path, format="fasta-pearson")):
+        seq = str(record.seq)
+        size = len(seq) - seq.count('-')
+        if size not in batches.keys():
+            seq = re.sub("-", "", seq)
+            batches[size] = [SeqSlope(
+                header=record.description,
+                seq=seq,
+                secondary_structure="",
+                encoded=[],
+                ss_encoded=[],
+                cluster_seq=[],
+                targets={}
+            )]
+        else:
+            seq = re.sub("-", "", seq)
+            batches[size].append(SeqSlope(
+                header=record.description,
+                seq=seq,
+                secondary_structure="",
+                encoded=[],
+                ss_encoded=[],
+                cluster_seq=[],
+                targets={}
+            ))
+    yield batches

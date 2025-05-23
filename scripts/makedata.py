@@ -5,9 +5,11 @@ from dataclasses import dataclass
 import torch
 import ViennaRNA as vrna
 
+import matplotlib.pyplot as plt
 import regex
 from Bio import SeqIO
 
+from loader import DatasetDCA
 
 @dataclass
 class Family:
@@ -63,4 +65,43 @@ def check_abstraction(path : str = r'/home/mbettiati/LBE_MatteoBettiati/code/vdc
         print(vrna.abstract_shapes(ss, 5))
 
 #generation using abstract shape level 4 or 5
-check_abstraction()
+#check_abstraction()
+
+NUC = {'-':0,'A':1,'U':2,'C':3,'G':4} # Example mapping
+REV_NUC = {v:k for k,v in NUC.items()}
+def save_samples(chains : torch.Tensor, chains_file : str, energies : torch.Tensor | None = None, headers : List[str] | None = None):
+    N, _, _ = chains.shape
+    chains=chains.argmax(dim=-1)
+    seqs = ["".join([REV_NUC[i.item()] for i in encoded]) for encoded in chains]
+
+    if headers is not None:
+        with open(chains_file, 'a') as writer:
+            for i in range(N):
+                writer.write(f"{headers[i]}\n{seqs[i]}\n")
+        return
+
+    with open(chains_file, 'w') as writer:
+        for i in range(N):
+            writer.write(f">chain_{i} | DCA Energy: {energies[i].item()}\n{seqs[i]}\n")
+
+def replace_index_azo(filepath : str = r'/home/mbettiati/LBE_MatteoBettiati/code/vdca/output/sequences/interpolation_constant/Azoarcus/biased/genseq0_0.fasta'):
+    data = DatasetDCA(path_data=filepath).mat
+    N, L, q = data.shape
+    fi = data.sum(dim=0)
+    fi_nogaps = fi[:, 1:].argmax(dim=-1) + 1
+    
+    gaps = fi[:, 0]/N
+    n = int(L*(gaps).mean().item())
+
+    highest = torch.topk(gaps, n).indices
+
+    encoded_data = data.argmax(dim=-1)
+    encoded_data[:, highest] = fi_nogaps[highest]
+
+    oh = torch.nn.functional.one_hot(encoded_data, q)
+    newfi = oh.sum(dim=0)/N
+
+    save_samples(chains=oh, chains_file=filepath)               
+
+
+replace_index_azo()

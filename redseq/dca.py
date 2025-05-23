@@ -21,27 +21,29 @@ def init_chains(q, num_chains, L, fi : torch.Tensor | None = None, device :str =
     return utils.get_one_hot(chains)
 
 
-def gibbs(chains, params : Dict[str, torch.Tensor], beta : int, nb_steps : int, fixed_gaps : torch.Tensor | None = None):
+def gibbs(chains, params : Dict[str, torch.Tensor], beta : int, nb_steps : int, constant_bias : bool | None = None, scan : bool | None = None, fixed_gaps : torch.Tensor | None = None):
     """Performs a Gibbs sweep over the chains."""
     N, L, q = chains.shape
+    if constant_bias is None and scan is None:
+        params["fields"][:, 0] += params['gaps_bias'][:, 0]
+    
     for _ in range(nb_steps):
         residue_idxs = torch.randperm(L)
         for i in residue_idxs:
             if fixed_gaps is not None:
-                if i in fixed_gaps:
-                    chains[:, i,:] = utils.get_one_hot(data=torch.tensor([0])).squeeze(1)
-                else:
-                    couplings_residue = params["couplings"][i].reshape(q, L * q)
-                    fields_residue = params["fields"][i].unsqueeze(0)
-                    fields_residue[:, 0] += params['gaps_bias'][i]
-
-                    logit_residue = ((fields_residue + chains.reshape(N, L * q) @ couplings_residue.T)[:, 1:])*beta
-                    chains[:, i, :] = utils.get_one_hot(torch.multinomial(torch.softmax(logit_residue, dim=-1), 1) + 1, num_classes=q).squeeze(1)
-            else:
-
                 couplings_residue = params["couplings"][i].reshape(q, L * q)
                 fields_residue = params["fields"][i].unsqueeze(0)
-                fields_residue[:, 0] += params['gaps_bias'][i]
+                if i in fixed_gaps:
+                    logit_residue = (fields_residue + chains.reshape(N, L * q) @ couplings_residue.T)*beta
+                    res = utils.get_one_hot(torch.multinomial(torch.softmax(logit_residue, dim=-1), 1), num_classes=q).squeeze(1)
+                else:
+                    logit_residue = ((fields_residue + chains.reshape(N, L * q) @ couplings_residue.T)[:, 1:])*beta
+                    res = utils.get_one_hot(torch.multinomial(torch.softmax(logit_residue, dim=-1), 1) + 1, num_classes=q).squeeze(1)
+
+                chains[:, i, :] = res
+            else:
+                couplings_residue = params["couplings"][i].reshape(q, L * q)
+                fields_residue = params["fields"][i].unsqueeze(0)
 
                 logit_residue = (fields_residue + chains.reshape(N, L * q) @ couplings_residue.T)*beta
                 chains[:, i, :] = utils.get_one_hot(torch.multinomial(torch.softmax(logit_residue, dim=-1), 1), num_classes=q).squeeze(1)
@@ -104,8 +106,7 @@ def update_params(
         params["fields"] += lr * grad["fields"] - reg_fields
         params["couplings"] += lr * grad["couplings"] - reg_couplings
 
-    fields_nonzero = np.nonzero(reg_fields)
-    couplings_nonzero = np.nonzero(reg_couplings)
+
 
 
 def choose_eval(eval : str):
@@ -173,13 +174,6 @@ def fit_model(dataset : DatasetDCA, max_step, min_eval, lr=0.001, N=10000, nb_gi
         nonzero_couplings_list.append(couplings_nonzero)
         print(step, convergence_eval, simple_pearson, fields_nonzero, couplings_nonzero)
         #convergence_eval = simple_pearson
-    
-    plt.plot(nonzero_field_list, marker='o', c='r', label="Fields nonzero")
-    plt.plot(nonzero_couplings_list, marker='o', c='b', label='Couplings nonzero')
-    plt.xlabel('Epoch training')
-    plt.ylabel("Nonzero count")
-    plt.yscale('log')
-    plt.savefig(r'/home/mbettiati/LBE_MatteoBettiati/code/vdca/output/figures/Azoarcus/Zerocount.png')
 
 def sample_model(halt_condition, 
                  evaluation : float,
@@ -191,6 +185,7 @@ def sample_model(halt_condition,
                  f_double : torch.Tensor,
                  beta : float, 
                  eval_method,
+                 scan : bool | None = None,
                  adaptative : bool | None = None,
                  bias_flag : bool | None = None,
                  target_gap_distribution : torch.Tensor | None = None, 
@@ -202,26 +197,43 @@ def sample_model(halt_condition,
     S = None
     if fixed_gaps:
         n_fix = int(L*target_gap_distribution.mean().item())
-        fix_indexes = torch.topk(f_single[:,0], k=n_fix).indices   
-        print(len(fix_indexes)/193)   
+        fN = f_single[:, 1:].sum(dim=1)
+        fG = f_single[:, 0]
+        
+        lfN = torch.where(torch.isinf(torch.log2(fN)), torch.tensor(-1e16, device=fN.device), torch.log2(fN))
+        lfG = torch.where(torch.isinf(torch.log2(fG)), torch.tensor(-1e16, device=fN.device), torch.log2(fG))
+
+        S_f = -fG * lfG
+
+        fix_indexes = torch.topk(S_f, k=n_fix).indices   
 
     if adaptative:
-        fN = f_single[:, :4].sum(dim=1)
-        fG = f_single[:, 0]
+        fN = f_single[:, 1:].sum(dim=1)
+        fG = f_single[:, 0]       
 
-        lfN = torch.where(torch.isinf(torch.log2(fN)), torch.tensor(0, device=fN.device), fN)
-        lfG = torch.where(torch.isinf(torch.log2(fG)), torch.tensor(0, device=fN.device), fG)
+        lfN = torch.log2(fN)
+        lfN = torch.where(torch.isinf(lfN), torch.tensor(0, device=fN.device), lfN)
 
-        S = (fN * lfN + fG * lfG)
-    
+        lfG = torch.log2(fG)
+        lfG = torch.where(torch.isinf(lfG), torch.tensor(0, device=fN.device), lfG)
+        
+        S = -lfG/fG + lfN/fN
+        #S = -lfG/torch.sqrt(fG) + lfN/torch.sqrt(fN)
+        #S  = -lfG + lfN
+        
+        S = torch.where(torch.isnan(S), torch.tensor(-1e16, device=fN.device), S)
+        print(S)
+
     step = 0
-    while not halt_condition(s=step, p=evaluation, gf=gap_fraction):
+    while not halt_condition(s=step, p=evaluation):
         samples = gibbs(
             chains=chains,
             params=dataset.params,
             beta=beta,
             nb_steps=max_sweeps,
             fixed_gaps=fix_indexes,
+            scan=scan,
+            constant_bias=constant_bias
         )   
         p_single, p_double = utils.get_freq_single_point(chains), utils.get_freq_two_points(chains)
         evaluation = eval_method(fi=f_single, fij=f_double, pi=p_single, pij=p_double)
@@ -231,13 +243,14 @@ def sample_model(halt_condition,
                 target_dist=target_gap_distribution,
                 dist_sample=p_single[:,0],
                 params=dataset.params,
+                fixed_gaps=fixed_gaps,
                 constant_bias=constant_bias,
                 adaptative=adaptative,
                 S=S
             )
         step+=1
         print("sampling", step, "cross-pearson", evaluation, "simple pearson", simple_pearson, "gap freq", p_single[:, 0].mean().item())
-    return samples
+    return samples, p_single[:, 0].mean().item()
 
 def sample_trained(
         dataset : DatasetDCA,
@@ -256,6 +269,8 @@ def sample_trained(
         adaptative : bool,
         plotting : bool,
         family_fig_dir : str,
+        scan : bool,
+        scanrange : List[int],
         interpolation_targets : List[float] | None = None,
         full_interpolation : bool | None = None,
     ):
@@ -270,10 +285,10 @@ def sample_trained(
     p_single, p_double = utils.get_freq_single_point(chains), utils.get_freq_two_points(chains)
     #dataset.params["fields"] = torch.where(torch.isinf(dataset.params["fields"]), torch.tensor(-1e16, device=dataset.params["fields"].device), dataset.params["fields"])
 
-    halt_condition = lambda s, p, gf: (s >= sample_it) or (p >= min_eval*(1-0.0033) and (gf < gap_fraction))
+    halt_condition = lambda s, p: (s >= sample_it) or (p >= 0.95)
     evaluation = eval_method(fi=f_single, fij=f_double, pi=p_single, pij=p_double)
 
-    samples = sample_model(halt_condition=halt_condition,
+    samples, _ = sample_model(halt_condition=halt_condition,
                            evaluation=evaluation,
                            gap_fraction=gap_fraction,
                            chains=chains,
@@ -282,6 +297,8 @@ def sample_trained(
                            beta=beta,
                            f_single=f_single,
                            f_double=f_double,
+                           scan=scan, 
+                           constant_bias=constant_bias,
                            eval_method=eval_method)
 
     null_model = init_chains(q, num_chains=num_gen, L=L, fi=dataset.params["fields"].exp(), null=True)
@@ -293,12 +310,17 @@ def sample_trained(
     utils.save_samples(chains=samples, chains_file=dataset.chains_unbiased_file, energies=energies)
     utils.save_params(infile=dataset.params_file_unbiased, params=dataset.params)
 
-
     if bias_flag:
         if full_interpolation:
             target_list = interpolation_targets
         else:
             target_list = [gap_fraction]
+
+        if scan:
+            bias_flag = False
+            sscan, escan, stepscan = scanrange
+            target_list = np.linspace(sscan, escan, int(stepscan))
+            target_list = np.array([-10, -8, -4, -3, -2, -1.5, -1.1, -0.85, -0.65, -0.5, -0.35, -0.15, -0.07, 0.15, 0.25, 0.35, 0.5, 0.65, 0.8, 0.95])
         
         for gap_fraction in target_list:
             bin = round(gap_fraction*100)
@@ -306,12 +328,14 @@ def sample_trained(
                                                                     f_single=f_single, 
                                                                     indel=indel,
                                                                     constant_bias=constant_bias).clamp(max=1)
-            
-            print("target average gap frequency", target_gap_distribution.mean().item())
+            if scan:
+                dataset.params["fields"][:, 0] += torch.full(dataset.params["gaps_bias"][:, 0].shape, gap_fraction)
+            else:
+                print("target average gap frequency", target_gap_distribution.mean().item())
             chains = init_chains(q, num_chains=num_gen, L=L)
             p_single, p_double = utils.get_freq_single_point(chains), utils.get_freq_two_points(chains)
             evaluation = eval_method(fi=f_single, fij=f_double, pi=p_single, pij=p_double)
-            samples = sample_model(halt_condition=halt_condition,
+            samples, endfreq = sample_model(halt_condition=halt_condition,
                                 evaluation=evaluation,
                                     gap_fraction=gap_fraction,
                                     chains=chains,
@@ -320,6 +344,7 @@ def sample_trained(
                                     f_single=f_single,
                                     f_double=f_double,
                                     bias_flag=bias_flag,
+                                    scan=scan,
                                     target_gap_distribution=target_gap_distribution,
                                     constant_bias=constant_bias,
                                     fixed_gaps=fixed_gaps,
@@ -327,8 +352,11 @@ def sample_trained(
                                     beta=beta,
                                     adaptative=adaptative
                                     )
+            
+            if scan:
+                bin = f"{gap_fraction*100}_{round(endfreq, 7)}"
 
-            null_model = init_chains(q, num_chains=num_gen, L=L, fi=dataset.params["fields"].exp(), null=True)
+            null_model = init_chains(q, num_chains=num_gen, L=L, fi=torch.softmax(dataset.params["fields"], dim=-1), null=True)
             energies = utils.compute_energy_confs(x=samples, h_parms=dataset.params["fields"], j_parms=dataset.params["couplings"])
             null_energies = utils.compute_energy_confs(x=null_model, h_parms=dataset.params["fields"], j_parms=dataset.params["couplings"])
             
@@ -339,7 +367,8 @@ def sample_trained(
             utils.save_samples(chains=null_model, chains_file=null_file, energies=null_energies)
             utils.save_samples(chains=samples, chains_file=chains_biased_file, energies=energies)
             utils.save_params(infile=params_file_biased, params=dataset.params)
-           
+        
+            dataset.params = utils.load_params(dataset.params_file_unbiased)
 
             if plotting:
                 display.homology_vs_gaps(chains_file_ref=dataset.chains_unbiased_file, 
@@ -352,5 +381,6 @@ def sample_trained(
                                         constant=constant_bias,
                                         fixed_gaps=fixed_gaps,
                                         eval_method=eval_method,
+                                        adaptative=adaptative,
                                         bin=bin)    
-
+            
