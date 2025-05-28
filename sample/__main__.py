@@ -40,7 +40,7 @@ def main(interpolation_dir : str, tmp_output : str, output_dir : str, k:int, nat
 
 
 if __name__ == "__main__":
-    interpolation_dir = r'/home/mbettiati/LBE_MatteoBettiati/code/vdca/output/sequences/scan_T_1_0'
+    interpolation_dir = r'/home/mbettiati/LBE_MatteoBettiati/code/vdca/output/sequences/scan_T_0_6'
     tmp_output = r'/home/mbettiati/LBE_MatteoBettiati/code/vdca/output/tmp'
     output_dir = r'/home/mbettiati/LBE_MatteoBettiati/code/vdca/output/sampled_seq'
     natural_msa = r'/home/mbettiati/LBE_MatteoBettiati/code/vdca/data/test/Azoarcus/Azoarcus.fasta'

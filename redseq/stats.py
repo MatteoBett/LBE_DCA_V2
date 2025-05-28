@@ -4,7 +4,7 @@ from typing import Dict, List
 import torch
 import numpy as np
 
-import redseq.dca as dca
+import redseq.utils as utils
 
 
 def compute_Mutual_information(seqs : torch.Tensor, params : Dict[str, torch.Tensor], idx : int, nuc : int):
@@ -19,10 +19,10 @@ def compute_Mutual_information(seqs : torch.Tensor, params : Dict[str, torch.Ten
     print(couplings[idx, nuc, :, :])
     """
 
-    energies = dca.compute_energy_confs(x=nucseqs, h_parms=fields, j_parms=couplings)
+    energies = utils.compute_energy_confs(x=nucseqs, h_parms=fields, j_parms=couplings)
     nucseqs[:, idx, :] = 0
     nucseqs[:, idx, 0] = 1
-    energies_env = dca.compute_energy_confs(x=nucseqs, h_parms=fields, j_parms=couplings)
+    energies_env = utils.compute_energy_confs(x=nucseqs, h_parms=fields, j_parms=couplings)
     
     return mask, energies.type(dtype=torch.float32), energies_env.type(dtype=torch.float32)
 

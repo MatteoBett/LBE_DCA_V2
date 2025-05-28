@@ -156,11 +156,10 @@ def runway(tested_seq : str, path_tested_seq : str, fully_connected_dca : str, o
     plt.show()
 
 for _dir in os.listdir(base_dir):
-    if _dir.startswith("scan"):
-        scanpath = os.path.join(base_dir, _dir, f"{_dir}.fasta")
-        if os.path.exists(scanpath):
-            runway(tested_seq=r'/home/mbettiati/LBE_MatteoBettiati/code/vdca/data/active_seq/all_tested.fasta',
-                path_tested_seq=r'/home/mbettiati/LBE_MatteoBettiati/code/vdca/data/active_seq/all_tested.dat',
-                fully_connected_dca=r'/home/mbettiati/LBE_MatteoBettiati/code/vdca/data/active_seq/fully_connected.dca',
-                output=os.path.join(r'/home/mbettiati/LBE_MatteoBettiati/code/vdca/output/figures/Azoarcus/', _dir),
-                sampled_seq=scanpath)
+    scanpath = os.path.join(base_dir, _dir, f"{_dir}.fasta")
+    if os.path.exists(scanpath):
+        runway(tested_seq=r'/home/mbettiati/LBE_MatteoBettiati/code/vdca/data/active_seq/all_tested.fasta',
+            path_tested_seq=r'/home/mbettiati/LBE_MatteoBettiati/code/vdca/data/active_seq/all_tested.dat',
+            fully_connected_dca=r'/home/mbettiati/LBE_MatteoBettiati/code/vdca/data/active_seq/fully_connected.dca',
+            output=os.path.join(base_dir, _dir),
+            sampled_seq=scanpath)

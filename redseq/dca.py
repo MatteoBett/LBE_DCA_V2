@@ -34,10 +34,10 @@ def gibbs(chains, params : Dict[str, torch.Tensor], beta : int, nb_steps : int, 
                 couplings_residue = params["couplings"][i].reshape(q, L * q)
                 fields_residue = params["fields"][i].unsqueeze(0)
                 if i in fixed_gaps:
-                    logit_residue = (fields_residue + chains.reshape(N, L * q) @ couplings_residue.T)*beta
+                    logit_residue = (fields_residue + chains.reshape(N, L * q) @ couplings_residue.T)/beta
                     res = utils.get_one_hot(torch.multinomial(torch.softmax(logit_residue, dim=-1), 1), num_classes=q).squeeze(1)
                 else:
-                    logit_residue = ((fields_residue + chains.reshape(N, L * q) @ couplings_residue.T)[:, 1:])*beta
+                    logit_residue = ((fields_residue + chains.reshape(N, L * q) @ couplings_residue.T)[:, 1:])/beta
                     res = utils.get_one_hot(torch.multinomial(torch.softmax(logit_residue, dim=-1), 1) + 1, num_classes=q).squeeze(1)
 
                 chains[:, i, :] = res

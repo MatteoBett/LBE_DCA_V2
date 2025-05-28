@@ -151,8 +151,7 @@ def homology_vs_gaps(chains_file_ref : str,
              dataset_unbiased=dataset_unbiased,
              fig_dir=fig_dir,
              eval_method=eval_method,
-             num=bin,
-             pdf=pdf)
+             num=bin)
     
     energies_nat_p_unbiased, energies_unbiased=get_energy_diff(dataset_natural=dataset_nat, dataset_binfile=dataset_unbiased, params=p_unbiased, pdf=pdf)
     energies_nat_p_biased, energies_biased=get_energy_diff(dataset_natural=dataset_nat, dataset_binfile=dataset_biased, params=p_biased, pdf=pdf)
@@ -377,7 +376,6 @@ def Corrplot(dataset_nat : torch.Tensor,
              fig_dir : str,
              eval_method :str,
              num :str,
-             pdf : bpdf.PdfPages
              ):
 
     nat_i, nat_ij = utils.get_freq_single_point(data=dataset_nat), utils.get_freq_two_points(data=dataset_nat)
@@ -411,7 +409,7 @@ def Corrplot(dataset_nat : torch.Tensor,
         axes2[i].set_title(f"Model trained at {eval_method}=0.95")
 
     fig.subplots_adjust(wspace=0.4)
-    fig.savefig(os.path.join(fig_dir, f"{num}_Cross-correlation.png"))
+    fig.savefig(os.path.join(fig_dir, f"{num}_Cross-correlation.png"), dpi=300)
     plt.close(fig)
         
     fig2.subplots_adjust(wspace=0.4)
