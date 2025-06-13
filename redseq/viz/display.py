@@ -375,7 +375,7 @@ def Corrplot(dataset_nat : torch.Tensor,
              dataset_unbiased : torch.Tensor,
              fig_dir : str,
              eval_method :str,
-             num :str,
+             num :str = 0,
              ):
 
     nat_i, nat_ij = utils.get_freq_single_point(data=dataset_nat), utils.get_freq_two_points(data=dataset_nat)
@@ -398,21 +398,21 @@ def Corrplot(dataset_nat : torch.Tensor,
     for i, ax in enumerate(axes):
         ax.scatter(corrlist[i][1], corrlist[i][0],)
 
-        ax.set_xlabel(f"Cij of {labelist[i]}")
-        ax.set_ylabel("Cij Natural")
-        ax.set_title(f"Model trained at {eval_method}=0.95")        
+        ax.set_xlabel(f"Cij of {labelist[i]}", fontsize=16)
+        ax.set_ylabel("Cij Natural", fontsize=16)
+        ax.set_title(f"Model trained at {eval_method}=0.95", fontsize=18)        
 
         axes2[i].scatter(freqlist[i], nat_ij, color='r')
 
-        axes2[i].set_xlabel(f"fij of {labelist[i]}")
-        axes2[i].set_ylabel("fij Natural")
-        axes2[i].set_title(f"Model trained at {eval_method}=0.95")
+        axes2[i].set_xlabel(f"fij of {labelist[i]}",fontsize=16)
+        axes2[i].set_ylabel("fij Natural", fontsize=16)
+        axes2[i].set_title(f"Model trained at {eval_method}=0.95", fontsize=18)
 
-    fig.subplots_adjust(wspace=0.4)
+    fig.tight_layout()
     fig.savefig(os.path.join(fig_dir, f"{num}_Cross-correlation.png"), dpi=300)
     plt.close(fig)
         
-    fig2.subplots_adjust(wspace=0.4)
+    fig2.tight_layout() 
     fig2.savefig(os.path.join(fig_dir, f"{num}_Correlation_pearson.png"))
     plt.close(fig)
         
